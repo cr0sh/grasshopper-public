@@ -5,7 +5,7 @@ Grasshopper is a Rust-based Lua runtime for cryptocurrency trading. It offers th
 - Periodic, asynchronous HTTP polling (`gh.subscribe()`)
     - Event loop based on subscription: see [`library/router.lua`](https://github.com/cr0sh/grasshopper-public/blob/master/library/router.lua)
     - Note: On-demand HTTP requests are performed synchronously
-- Native `Decimals` support(`gh.decimal()`) - don't panic on handling precision and arithmetic errors like on CCXT!
+- Native `Decimal`s support(`gh.decimal()`) - don't panic on handling precision and arithmetic errors like on CCXT!
 - Type annotations based on lua-language-server(aka sumneko-lua): see [`library/types.lua`](https://github.com/cr0sh/grasshopper-public/blob/master/library/types.lua)
 - Supports six cryptocurrency exchanges: Binance, Bithumb, Bybit, Gate.io, OKX, UPbit. More to come!
 - Logging experience with [tracing](https://crates.io/crates/tracing) bindings on lua (`gh.info`, `gh.debug`, `gh.warn`, ...)
