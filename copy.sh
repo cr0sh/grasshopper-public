@@ -9,6 +9,8 @@ rsync -rv \
     --exclude .teller.yml \
     --exclude /out \
     --exclude '*.sh' \
+    --exclude LICENSE \
+    --exclude README.md \
     ../grasshopper/ .
 
 mkdir -p library/strategy
