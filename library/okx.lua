@@ -18,6 +18,8 @@ end
 ---@class Okx: Exchange
 local M = {}
 
+local contract_size_cache = {}
+
 function M.subscribe_orderbook(market, params)
 	local base, quote, market_type = common.parse_market(market)
 	local endpoint = "/api/v5/market/books"
@@ -155,12 +157,18 @@ function M.limit_order(market, price, amount, params)
 		px = tostring(price),
 		sz = tostring(amount:abs()),
 	}
+	local contract_size
 	if market_type == "spot" then
 		default_params.instId = base .. "-" .. quote
 		default_params.tdMode = "cash"
 	elseif market_type == "swap" then
 		default_params.instId = base .. "-" .. quote .. "-SWAP"
 		default_params.tdMode = "cross"
+		contract_size = contract_size_cache[default_params.instId]
+		if contract_size == nil then
+			error(string.format("contract size unknown for instrument %s", default_params.instId))
+		end
+		default_params.sz = tostring((amount / contract_size):abs())
 	else
 		error("unknown market type " .. market_type)
 	end
@@ -183,10 +191,16 @@ function M.market_order(market, amount, params)
 		sz = tostring(amount:abs()),
 		tdMode = "cash",
 	}
+	local contract_size
 	if market_type == "spot" then
 		default_params.instId = base .. "-" .. quote
 	elseif market_type == "swap" then
 		default_params.instId = base .. "-" .. quote .. "-SWAP"
+		contract_size = contract_size_cache[default_params.instId]
+		if contract_size == nil then
+			error(string.format("contract size unknown for instrument %s", default_params.instId))
+		end
+		default_params.sz = tostring((amount / contract_size):abs())
 	else
 		error("unknown market type " .. market_type)
 	end
@@ -244,6 +258,14 @@ end
 
 function M.send(endpoint, method, params, private)
 	return extract_data(gh._send(M.build_request(endpoint, method, params, private)))
+end
+
+local instruments_data = M.send("/api/v5/public/instruments", "get", { instType = "SWAP" })
+for i, v in ipairs(instruments_data) do
+	if v["instId"] == nil or v["instId"] == "" then
+		error(string.format("empty instid on index %d", i))
+	end
+	contract_size_cache[v["instId"]] = decimal(v["ctVal"])
 end
 
 return M

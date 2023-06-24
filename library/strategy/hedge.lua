@@ -17,7 +17,17 @@ local taker_orderbooks = {}
 ---@field market_types {[string]: MarketType[]}
 
 ---@param config HedgeConfig
-local function hedge(config)
+local function hedge(transposed_config)
+	local config = {}
+	for coin, values in pairs(transposed_config) do
+		for key, value in pairs(values) do
+			if config[key] == nil then
+				config[key] = { [coin] = value }
+			else
+				config[key][coin] = value
+			end
+		end
+	end
 	local function get_config(key)
 		if config[key] == nil then
 			error(string.format("missing config.%s", key))
@@ -87,9 +97,9 @@ local function hedge(config)
 					maker_takers[currency][2].limit_order(
 						string.format("%s:%s/USDT", market_types[currency][2], currency),
 						(limit_price / taker_price_unit[currency]):round_to_decimals(0) * taker_price_unit[currency],
-						(-net_position)
-							:round_to_decimals(taker_qty_precision[currency])
-							:min((max_order_size_usdt / mid_price):floor_to_decimals(taker_qty_precision[currency]))
+						(-net_position):round_to_decimals(taker_qty_precision[currency]):min(
+							(max_order_size_usdt[currency] / mid_price):floor_to_decimals(taker_qty_precision[currency])
+						)
 					)
 					last_hedge[currency] = gh.millis()
 				end

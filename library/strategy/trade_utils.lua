@@ -64,7 +64,7 @@ local OrderManager = {}
 ---@param exchange Exchange
 ---@param market Market
 ---@return OrderManager
-function OrderManager:new(exchange, market)
+function OrderManager:new(exchange, market, orders_params)
 	local o = {}
 	setmetatable(o, self)
 	self.__index = self
@@ -77,7 +77,7 @@ function OrderManager:new(exchange, market)
 	self.orders_cleaned = false
 	self.should_cancel = {}
 
-	self.extractor = self.exchange.subscribe_orders(self.market)
+	self.extractor = self.exchange.subscribe_orders(self.market, orders_params)
 
 	return o
 end
@@ -150,7 +150,7 @@ end
 ---@param amount Decimal
 ---@param filled_hook fun()|nil
 ---@return Order|nil
-function OrderManager:limit_order(price, amount, filled_hook)
+function OrderManager:limit_order(price, amount, filled_hook, params)
 	local success, ret = util.pwcall(self.exchange.limit_order, self.market, price, amount)
 	if not success then
 		return nil

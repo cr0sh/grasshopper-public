@@ -3,14 +3,14 @@ local json = require("json")
 local router = require("router")
 local util = require("util")
 
-local function extract_data(payload)
+local function extract_obj(payload)
 	local success, obj = pcall(json.decode, payload.content)
 	if not success then
 		gh.debug("Failed payload: " .. payload.content)
 		error("JSON decode failed: " .. tostring(obj))
 	end
 	if obj.status == "0000" then
-		return obj.data
+		return obj
 	end
 	error({ code = obj.status, message = util.dump(obj) })
 end
@@ -23,7 +23,7 @@ function M.subscribe_orderbook(market, params)
 	local endpoint = string.format("/public/orderbook/%s_%s", base, quote)
 
 	local function parse_orderbook(payload)
-		local data = extract_data(payload)
+		local data = extract_obj(payload).data
 
 		local orderbook = { bids = {}, asks = {} }
 		for _, v in ipairs(data.bids) do
@@ -48,7 +48,7 @@ end
 function M.subscribe_balance(market_type, params)
 	local _ = market_type
 	local function parse_balance(payload)
-		local data = extract_data(payload)
+		local data = extract_obj(payload).data
 		local balance = {}
 		for k, v in pairs(data) do
 			local s = string.find(k, "total_")
@@ -79,7 +79,7 @@ function M.subscribe_orders(market, params)
 	end
 
 	local function parse_orders(payload)
-		local success, data = pcall(extract_data, payload)
+		local success, data = pcall(extract_obj, payload)
 		if not success then
 			if data.code == "5600" then
 				return common.wrap_orders({})
@@ -88,7 +88,7 @@ function M.subscribe_orders(market, params)
 			end
 		end
 		local orders = {}
-		for _, v in pairs(data) do
+		for _, v in pairs(data.data) do
 			if params.type == "bid" then
 				table.insert(orders, { price = decimal(v.price), amount = decimal(v.units), id = v.order_id })
 			else
@@ -191,7 +191,7 @@ function M.build_request(endpoint, method, params, private)
 end
 
 function M.send(endpoint, method, params, private)
-	return extract_data(gh._send(M.build_request(endpoint, method, params, private)))
+	return extract_obj(gh._send(M.build_request(endpoint, method, params, private)))
 end
 
 return M
