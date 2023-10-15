@@ -1,10 +1,6 @@
 {
     "runtime.version": "LuaJIT",
-    "diagnostics.globals": [
-        "gh",
-        "decimal",
-        "atexit"
-    ],
+    "diagnostics.globals": [],
     "workspace.library": [
         "library"
     ]

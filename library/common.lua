@@ -1,3 +1,5 @@
+local decimal = require("decimal")
+
 local M = {}
 
 ---Splits given market identifier `market_type:base/quote` to parts.

@@ -11,6 +11,7 @@
 ---@field abs fun(self: Decimal): Decimal
 ---@field floor_to_decimals fun(self: Decimal, decimals: integer): Decimal
 ---@field ceil_to_decimals fun(self: Decimal, decimals: integer): Decimal
+---@field round_to_decimals fun(self: Decimal, decimals: integer): Decimal
 
 ---@alias MarketType "spot" | "swap"
 ---@alias Market string
@@ -29,6 +30,7 @@
 ---@field free Decimal
 ---@field locked Decimal
 ---@field total Decimal
+---@field debt Decimal | nil
 
 ---@class Position: {[string]:Decimal}
 
@@ -38,6 +40,7 @@
 ---@field body string | nil
 ---@field headers {[string]:string} | nil
 ---@field sign string | nil
+---@field primary_only boolean | nil
 
 ---@class Order
 ---@field price Decimal | nil

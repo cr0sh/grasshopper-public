@@ -1,7 +1,10 @@
 local common = require("common")
-local json = require("json")
 local router = require("router")
 local util = require("util")
+local decimal = require("decimal")
+local gh = require("gh")
+local json = require("json")
+local send = require("send")
 
 local function extract_obj(payload)
 	local success, obj = pcall(json.decode, payload.content)
@@ -27,21 +30,27 @@ function M.subscribe_orderbook(market, params)
 
 		local orderbook = { bids = {}, asks = {} }
 		for _, v in ipairs(data.bids) do
-			v.price = decimal(v.price)
-			v.quantity = decimal(v.quantity)
-			table.insert(orderbook.bids, v)
+			if decimal(v.quantity) > decimal(0) then
+				table.insert(orderbook.bids, {
+					price = decimal(v.price),
+					quantity = decimal(v.quantity),
+				})
+			end
 		end
 		for _, v in ipairs(data.asks) do
-			v.price = decimal(v.price)
-			v.quantity = decimal(v.quantity)
-			table.insert(orderbook.asks, v)
+			if decimal(v.quantity) > decimal(0) then
+				table.insert(orderbook.asks, {
+					price = decimal(v.price),
+					quantity = decimal(v.quantity),
+				})
+			end
 		end
 		return common.wrap_orderbook(orderbook)
 	end
 
 	local req = M.build_request(endpoint, "get", params)
 
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 150)
 	return router.register(req, parse_orderbook)
 end
 
@@ -67,16 +76,12 @@ function M.subscribe_balance(market_type, params)
 
 	local req = M.build_request("/info/balance", "post", util.apply_default(params, { currency = "ALL" }), true)
 
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 200)
 	return router.register(req, parse_balance)
 end
 
 function M.subscribe_orders(market, params)
 	local base, quote = common.parse_market(market)
-
-	if params.type == nil then
-		error('Bithumb orders API requires a field type = "bid" or "ask"')
-	end
 
 	local function parse_orders(payload)
 		local success, data = pcall(extract_obj, payload)
@@ -88,11 +93,13 @@ function M.subscribe_orders(market, params)
 			end
 		end
 		local orders = {}
-		for _, v in pairs(data.data) do
-			if params.type == "bid" then
-				table.insert(orders, { price = decimal(v.price), amount = decimal(v.units), id = v.order_id })
-			else
-				table.insert(orders, { price = decimal(v.price), amount = -decimal(v.units), id = v.order_id })
+		for _, v in ipairs(data.data) do
+			if v.order_currency == base and v.payment_currency == quote then
+				if v.type == "bid" then
+					table.insert(orders, { price = decimal(v.price), amount = decimal(v.units), id = v.order_id })
+				else
+					table.insert(orders, { price = decimal(v.price), amount = -decimal(v.units), id = v.order_id })
+				end
 			end
 		end
 
@@ -106,7 +113,7 @@ function M.subscribe_orders(market, params)
 		true
 	)
 
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 200)
 	return router.register(req, parse_orders)
 end
 
@@ -177,21 +184,17 @@ function M.build_request(endpoint, method, params, private)
 	local tbl
 	if method == "get" then
 		url = url .. "?" .. urlencoded
-		tbl = { url = url, method = method }
+		tbl = { url = url, method = method, sign = private }
 	elseif method == "post" then
-		tbl = { url = url, method = method, body = urlencoded }
+		tbl = { url = url, method = method, body = urlencoded, sign = private }
 	else
 		error("invalid method " .. method)
-	end
-
-	if private then
-		tbl.sign = "bithumb"
 	end
 	return tbl
 end
 
 function M.send(endpoint, method, params, private)
-	return extract_obj(gh._send(M.build_request(endpoint, method, params, private)))
+	return extract_obj(send.send(M.build_request(endpoint, method, params, private)))
 end
 
 return M

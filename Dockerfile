@@ -1,4 +1,4 @@
-FROM rust:1.69-slim-bullseye as BUILDER
+FROM rust:1.72-slim-bullseye as BUILDER
 
 WORKDIR /build
 
@@ -13,7 +13,7 @@ COPY src ./src
 COPY Cargo.toml .
 COPY Cargo.lock .
 
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM debian:bullseye-slim as RUNNER
 

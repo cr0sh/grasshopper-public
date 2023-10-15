@@ -18,7 +18,7 @@ local function extract_data(payload)
 	return obj
 end
 
----@class Binance: Exchange
+---@class BinancePm: Exchange
 local M = {}
 
 function M.subscribe_orderbook(market, params)
@@ -61,34 +61,32 @@ function M.subscribe_orderbook(market, params)
 end
 
 function M.subscribe_balance(market_type, params)
-	local endpoint
-	if market_type == "spot" then
-		endpoint = "/api/v3/account"
-	elseif market_type == "swap" then
-		endpoint = "/fapi/v2/balance"
-	else
-		error("unsupported account type ")
-	end
+	local _ = market_type
+	local endpoint = "/papi/v1/balance"
 
 	local function parse_balance(payload)
 		local data = extract_data(payload)
 		local balance = {}
 		if market_type == "spot" then
-			for _, v in ipairs(data.balances) do
-				if not (util.is_zero(v.free) and util.is_zero(v.locked) and util.is_zero(v.total)) then
-					local free = decimal(v.free)
-					local locked = decimal(v.locked)
-					balance[v.asset] = { free = free, locked = locked, total = free + locked }
+			for _, v in ipairs(data) do
+				if
+					not (
+						v.free ~= nil
+						and util.is_zero(v.free)
+						and util.is_zero(v.locked)
+						and util.is_zero(v.total)
+						and v.debt ~= nil
+						and util.is_zero(v.debt)
+					)
+				then
+					local free = decimal(v.crossMarginFree)
+					local total = decimal(v.totalWalletBalance)
+					local debt = decimal(v.crossMarginBorrowed) + decimal(v.crossMarginInterest)
+					balance[v.asset] = { free = free, locked = total - free, total = total, debt = debt }
 				end
 			end
 		else
-			for _, v in ipairs(data) do
-				if not (util.is_zero(v.maxWithdrawAmount) and util.is_zero(v.availableBalance)) then
-					local free = decimal(v.maxWithdrawAmount)
-					local total = decimal(v.availableBalance)
-					balance[v.asset] = { free = free, locked = total - free, total = total }
-				end
-			end
+			-- TODO
 		end
 		return common.wrap_balance(balance)
 	end
@@ -102,11 +100,11 @@ function M.subscribe_orders(market, params)
 	local endpoint
 	local base, quote, market_type = common.parse_market(market)
 	if market_type == "spot" then
-		endpoint = "/api/v3/allOrders"
+		endpoint = "/papi/v1/margin/openOrders"
 	elseif market_type == "swap" then
-		endpoint = "/fapi/v1/orders"
+		endpoint = "/papi/v1/um/openOrders"
 	else
-		error("unsupported account type ")
+		error("unsupported account type")
 	end
 
 	local function parse_orders(payload)
@@ -147,7 +145,7 @@ function M.subscribe_position(market_type, params)
 	if market_type == "spot" then
 		error("position is not available in spot accounts")
 	elseif market_type == "swap" then
-		endpoint = "/fapi/v2/positionRisk"
+		endpoint = "/papi/v1/um/positionRisk"
 	else
 		error("unsupported market type " .. market_type)
 	end
@@ -174,11 +172,11 @@ function M.limit_order(market, price, amount, params)
 	local endpoint
 	local base, quote, market_type = common.parse_market(market)
 	if market_type == "spot" then
-		endpoint = "/api/v3/order"
+		endpoint = "/papi/v1/margin/order"
 	elseif market_type == "swap" then
-		endpoint = "/fapi/v1/order"
+		endpoint = "/papi/v1/um/order"
 	else
-		error("unsupported market type" .. market_type)
+		error("unsupported market type " .. market_type)
 	end
 	local default_params = {
 		symbol = base .. quote,
@@ -187,6 +185,9 @@ function M.limit_order(market, price, amount, params)
 		price = price,
 		timeInForce = "GTC",
 	}
+	if market_type == "spot" then
+		default_params.sideEffectType = "MARGIN_BUY"
+	end
 	if amount > decimal(0) then
 		default_params.side = "BUY"
 	else
@@ -202,17 +203,20 @@ function M.market_order(market, amount, params)
 	local endpoint
 	local base, quote, market_type = common.parse_market(market)
 	if market_type == "spot" then
-		endpoint = "/api/v3/order"
+		endpoint = "/papi/v1/margin/order"
 	elseif market_type == "swap" then
-		endpoint = "/fapi/v1/order"
+		endpoint = "/papi/v1/um/order"
 	else
-		error("unsupported market type" .. market_type)
+		error("unsupported market type " .. market_type)
 	end
 	local default_params = {
 		symbol = base .. quote,
 		type = "MARKET",
 		quantity = amount:abs(),
 	}
+	if market_type == "spot" then
+		default_params.sideEffectType = "MARGIN_BUY"
+	end
 	if amount > decimal(0) then
 		default_params.side = "BUY"
 	else
@@ -227,11 +231,11 @@ function M.cancel_order(market, order, params)
 	local endpoint
 	local base, quote, market_type = common.parse_market(market)
 	if market_type == "spot" then
-		endpoint = "/api/v3/order"
+		endpoint = "/papi/v1/margin/order"
 	elseif market_type == "swap" then
-		endpoint = "/fapi/v1/order"
+		endpoint = "/papi/v1/um/order"
 	else
-		error("unsupported market type" .. market_type)
+		error("unsupported market type " .. market_type)
 	end
 	local default_params = {
 		symbol = base .. quote,
@@ -247,6 +251,8 @@ function M.build_request(endpoint, method, params, private)
 		url = "https://api.binance.com" .. endpoint
 	elseif api == "fapi" then
 		url = "https://fapi.binance.com" .. endpoint
+	elseif api == "papi" then
+		url = "https://papi.binance.com" .. endpoint
 	else
 		error("unknown endpoint type " .. api)
 	end

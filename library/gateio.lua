@@ -1,7 +1,10 @@
 local common = require("common")
-local json = require("json")
 local router = require("router")
 local util = require("util")
+local decimal = require("decimal")
+local gh = require("gh")
+local json = require("json")
+local send = require("send")
 
 local function extract_data(payload)
 	local success, obj = pcall(json.decode, payload.content)
@@ -37,7 +40,6 @@ end
 function M.subscribe_orderbook(market, params)
 	local base, quote, market_type = common.parse_market(market)
 	local endpoint
-	local symbol
 	local default_params = {}
 	if market_type == "spot" then
 		endpoint = "/spot/order_book"
@@ -110,7 +112,7 @@ function M.subscribe_balance(market_type, params)
 
 	local req = M.build_request(endpoint, "get", util.apply_default(params, {}), true)
 
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 200)
 	return router.register(req, parse_balance)
 end
 
@@ -137,7 +139,7 @@ function M.subscribe_position(market_type, params)
 
 	local req = M.build_request(endpoint, "get", params, true)
 
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 200)
 	return router.register(req, parse_position)
 end
 
@@ -160,7 +162,6 @@ function M.subscribe_orders(market, params)
 		local orders = {}
 		if market_type == "spot" then
 			local raw_orders
-			local found = false
 			for _, v in ipairs(data) do
 				if v.currency_pair == base .. "_" .. quote then
 					raw_orders = v.orders
@@ -201,7 +202,7 @@ function M.subscribe_orders(market, params)
 
 	local req = M.build_request(endpoint, "get", util.apply_default(params, default_params), true)
 
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 200)
 	return router.register(req, parse_orders)
 end
 
@@ -295,24 +296,22 @@ function M.build_request(endpoint, method, params, private)
 		if urlencoded ~= "" then
 			url = url .. "?" .. urlencoded
 		end
-		tbl = { url = url, method = method }
+		tbl = { url = url, method = method, sign = private }
 	else
 		tbl = {
 			url = url,
 			method = method,
 			body = json.encode(params),
 			headers = { ["Content-Type"] = "application/json", ["Accept"] = "application/json" },
+			sign = private,
 		}
 	end
 
-	if private then
-		tbl.sign = "gateio"
-	end
 	return tbl
 end
 
 function M.send(endpoint, method, params, private)
-	return extract_data(gh._send(M.build_request(endpoint, method, params, private)))
+	return extract_data(send.send(M.build_request(endpoint, method, params, private)))
 end
 
 return M

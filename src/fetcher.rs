@@ -1,40 +1,68 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    env::var,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use tokio::{
-    sync::{broadcast, mpsc, oneshot},
+    sync::{oneshot, Notify},
     time::interval,
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
-use crate::{
-    lua_interface::{RequestPayload, ResponsePayload},
-    TERMINATE_NOTIFY,
-};
+use crate::event::{RequestPayload, ResponsePayload};
 
 pub struct Fetcher {
-    sender: Arc<broadcast::Sender<ResponsePayload>>,
+    last_data: Arc<Mutex<Option<ResponsePayload>>>,
+    notify: Arc<Notify>,
     kill: Option<oneshot::Sender<()>>,
 }
 
 impl Fetcher {
     pub fn new(payload: RequestPayload, period: Duration) -> Self {
-        let (tx, _) = broadcast::channel(32);
-        let tx = Arc::new(tx);
+        let last_data = Arc::new(Mutex::new(None));
+        let notify = Arc::new(Notify::new());
         let (ktx, krx) = oneshot::channel();
-        tokio::spawn(Self::task(payload, Arc::clone(&tx), krx, period));
+        tokio::spawn(Self::task(
+            payload,
+            Arc::clone(&last_data),
+            Arc::clone(&notify),
+            krx,
+            period,
+        ));
         Self {
-            sender: tx,
+            last_data,
+            notify,
             kill: Some(ktx),
         }
     }
 
     async fn task(
         payload: RequestPayload,
-        sender: Arc<broadcast::Sender<ResponsePayload>>,
+        last_data: Arc<Mutex<Option<ResponsePayload>>>,
+        notify: Arc<Notify>,
         mut krx: oneshot::Receiver<()>,
         period: Duration,
     ) {
-        let client = reqwest::Client::new();
+        let mut local_address_index = 0usize;
+        let local_addresses = var("GRASSHOPPER_LOCAL_ADDRS")
+            .ok()
+            .map(|x| x.split(',').map(String::from).collect::<Vec<_>>());
+        let clients = if payload.primary_only {
+            vec![reqwest::Client::new()]
+        } else if let Some(local_addresses) = local_addresses {
+            local_addresses
+                .into_iter()
+                .map(|x| {
+                    reqwest::ClientBuilder::new()
+                        .local_address(Some(x.parse().expect("invalid local address")))
+                        .build()
+                        .expect("cannot build reqwest client")
+                })
+                .collect()
+        } else {
+            vec![reqwest::Client::new()]
+        };
         let mut interval = interval(period);
         loop {
             interval.tick().await;
@@ -47,8 +75,9 @@ impl Fetcher {
                     continue;
                 }
             };
+            local_address_index = local_address_index.overflowing_add(1).0;
             let resp = tokio::select! {
-                r = client.execute(req) => r,
+                r = clients[local_address_index % clients.len()].execute(req) => r,
                 _ = &mut krx => break,
             };
 
@@ -57,61 +86,30 @@ impl Fetcher {
                     if !x.status().is_success() {
                         error!(%payload.url, %payload.method, status=%x.status(), "request failed");
                     }
-                    let status = x.status().as_u16();
-                    let headers = x
-                        .headers()
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.to_string(),
-                                String::from_utf8_lossy(v.as_bytes()).to_string(),
-                            )
-                        })
-                        .collect();
-                    let Ok(content) = x.bytes().await else {
-                            error!(%payload.url, "cannot read bytes");
-                            continue
-                        };
-                    let content = String::from_utf8_lossy(&content).to_string();
-                    if sender
-                        .send(ResponsePayload {
-                            url: payload.url.clone(),
-                            content,
-                            status,
-                            headers,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
+                    let url = x.url().clone();
+                    let payload = match ResponsePayload::new(&payload.url, x).await {
+                        Ok(x) => x,
+                        Err(e) => {
+                            error!(%url, error = Box::from(e) as Box<dyn std::error::Error>, "cannot read response");
+                            continue;
+                        }
+                    };
+                    *last_data.lock().unwrap() = Some(payload);
+                    notify.notify_waiters();
                 }
                 Err(err) => error!(%err, "cannot send request"),
             }
         }
     }
 
-    pub fn subscribe(&self, tx: mpsc::Sender<Option<ResponsePayload>>) -> oneshot::Sender<()> {
-        let mut receiver = self.sender.subscribe();
-        let (ktx, mut krx) = oneshot::channel();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    r = receiver.recv() => {
-                        match r {
-                            Ok(x) => {
-                                let _ = tx.send(Some(x)).await;
-                            }
-                            Err(e) => warn!(%e),
-                        }
-                    }
-                    _ = &mut krx => return,
-                    _ = TERMINATE_NOTIFY.notified() => {
-                        let _ = tx.send(None).await;
-                    }
-                }
+    /// Returns [`None`] if the sender side of the channel has been dropped.
+    pub async fn next(self: Arc<Self>) -> Option<ResponsePayload> {
+        loop {
+            self.notify.notified().await;
+            if let Some(x) = self.last_data.lock().unwrap().take() {
+                break Some(x);
             }
-        });
-        ktx
+        }
     }
 }
 

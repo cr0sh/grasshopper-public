@@ -1,7 +1,10 @@
 local common = require("common")
-local json = require("json")
 local router = require("router")
 local util = require("util")
+local decimal = require("decimal")
+local gh = require("gh")
+local json = require("json")
+local send = require("send")
 
 local function extract_data(payload)
 	local success, obj = pcall(json.decode, payload.content)
@@ -55,7 +58,7 @@ function M.subscribe_orderbook(market, params)
 		})
 	)
 
-	gh._subscribe(req, 300)
+	gh._subscribe(req, 200)
 	return router.register(req, parse_orderbook)
 end
 
@@ -67,9 +70,11 @@ function M.subscribe_balance(market_type, params)
 		local data = extract_data(payload)
 		local balance = {}
 		for _, v in ipairs(data) do
-			local free = decimal(v.balance)
-			local locked = decimal(v.locked)
-			balance[v.currency] = { free = free, locked = locked, total = free + locked }
+			if not (util.is_zero(v.balance) and util.is_zero(v.locked)) then
+				local free = decimal(v.balance)
+				local locked = decimal(v.locked)
+				balance[v.currency] = { free = free, locked = locked, total = free + locked }
+			end
 		end
 		return common.wrap_balance(balance)
 	end
@@ -93,9 +98,9 @@ function M.subscribe_orders(market, params)
 					price = decimal(v.price),
 				}
 				if order.side == "bid" then
-					v.amount = decimal(v.volume)
+					order.amount = decimal(v.volume)
 				else
-					v.amount = -decimal(v.volume)
+					order.amount = -decimal(v.volume)
 				end
 				table.insert(orders, order)
 			end
@@ -111,7 +116,7 @@ function M.subscribe_orders(market, params)
 		}),
 		true
 	)
-	gh._subscribe(req, 500)
+	gh._subscribe(req, 300)
 	return router.register(req, parse_orders)
 end
 
@@ -177,7 +182,7 @@ end
 
 function M.build_request(endpoint, method, params, private)
 	local url = "https://api.upbit.com" .. endpoint
-	local tbl = { method = method }
+	local tbl = { method = method, sign = private }
 	if method == "get" then
 		local flattened = {}
 		for k, v in pairs(params) do
@@ -199,14 +204,11 @@ function M.build_request(endpoint, method, params, private)
 	end
 	tbl.url = url
 
-	if private then
-		tbl.sign = "upbit"
-	end
 	return tbl
 end
 
 function M.send(endpoint, method, params, private)
-	return extract_data(gh._send(M.build_request(endpoint, method, params, private)))
+	return extract_data(send.send(M.build_request(endpoint, method, params, private)))
 end
 
 return M

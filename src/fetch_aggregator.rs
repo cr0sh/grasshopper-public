@@ -1,87 +1,54 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::{Arc, Mutex},
+    cell::RefCell,
+    collections::HashMap,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use tokio::{
-    runtime::Handle,
-    sync::{mpsc, oneshot},
-};
+use futures::{future::select_all, FutureExt};
+use tokio::sync::Mutex;
 use tracing::{info, instrument};
 
 use crate::{
+    event::{RequestPayload, ResponsePayload},
     fetcher::Fetcher,
-    lua_interface::{RequestPayload, ResponsePayload},
 };
 
+pub(crate) static DEFAULT_FETCH_AGGREGATOR: OnceLock<FetchAggregator> = OnceLock::new();
+
+#[derive(Clone)]
 pub struct FetchAggregator {
-    fetchers: Mutex<HashMap<RequestPayload, Fetcher>>,
+    #[allow(clippy::type_complexity)]
+    fetchers: Arc<Mutex<RefCell<HashMap<RequestPayload, Arc<Fetcher>>>>>,
 }
 
 impl FetchAggregator {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            fetchers: Mutex::new(HashMap::new()),
-        })
-    }
-
-    /// Must be called in a tokio context
-    pub fn new_session(self: &Arc<Self>) -> Session {
-        let (tx, rx) = mpsc::channel(32);
-        Session {
-            fetch_aggregator: Arc::clone(self),
-            tx,
-            rx: Arc::new(Mutex::new(rx)),
-            tokio_handle: Handle::current(),
-            kill_txs: Vec::new(),
+    pub fn new() -> Self {
+        Self {
+            fetchers: Arc::new(Mutex::const_new(RefCell::new(HashMap::new()))),
         }
     }
-}
 
-pub struct Session {
-    fetch_aggregator: Arc<FetchAggregator>,
-    tx: mpsc::Sender<Option<ResponsePayload>>,
-    rx: Arc<Mutex<mpsc::Receiver<Option<ResponsePayload>>>>,
-    tokio_handle: Handle,
-    kill_txs: Vec<oneshot::Sender<()>>,
-}
-
-impl Session {
     #[instrument(skip(self))]
-    pub fn subscribe(&mut self, payload: RequestPayload, period: Duration) -> eyre::Result<()> {
-        let mut fetchers = self
-            .fetch_aggregator
-            .fetchers
-            .lock()
-            .expect("fetchers lock poisoned");
-        let _guard = self.tokio_handle.enter();
+    pub async fn subscribe(&self, payload: RequestPayload, period: Duration) {
+        let guard = self.fetchers.lock().await;
+        let mut fetchers = guard.borrow_mut();
 
-        let ktx = match fetchers.entry(payload.clone()) {
-            Entry::Occupied(x) => x.get().subscribe(self.tx.clone()),
-            Entry::Vacant(x) => x
-                .insert(Fetcher::new(payload, period))
-                .subscribe(self.tx.clone()),
-        };
-
-        self.kill_txs.push(ktx);
-
-        info!("new subscription created");
-
-        Ok(())
+        fetchers.entry(payload.clone()).or_insert_with(|| {
+            info!("new subscription created");
+            Arc::new(Fetcher::new(payload.clone(), period))
+        });
     }
 
-    pub fn next(&self) -> Option<ResponsePayload> {
-        self.rx
-            .lock()
-            .expect("lock poisoned")
-            .blocking_recv()
-            .flatten()
-    }
-
-    pub fn kill_all_fetchers(&mut self) {
-        for ktx in self.kill_txs.drain(..) {
-            ktx.send(()).expect("cannot kill fetcher bridge task");
+    pub async fn next(&self) -> Option<ResponsePayload> {
+        let mut futs = Vec::new();
+        {
+            let guard = self.fetchers.lock().await;
+            let fetchers = guard.borrow();
+            for fetcher in fetchers.values() {
+                futs.push(Arc::clone(fetcher).next().boxed_local());
+            }
         }
+        select_all(futs).await.0
     }
 }

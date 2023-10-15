@@ -1,7 +1,10 @@
 local common = require("common")
-local json = require("json")
 local router = require("router")
 local util = require("util")
+local decimal = require("decimal")
+local gh = require("gh")
+local json = require("json")
+local send = require("send")
 
 ---@class Bybit: Exchange
 local M = {}
@@ -237,21 +240,18 @@ function M.build_request(endpoint, method, params, private)
 		if urlencoded ~= "" then
 			url = url .. "?" .. urlencoded
 		end
-		tbl = { url = url, method = method }
+		tbl = { url = url, method = method, sign = private }
 	elseif method == "post" then
-		tbl = { url = url, method = method, body = json.encode(params) }
+		tbl = { url = url, method = method, body = json.encode(params), sign = private }
 	else
 		error("invalid method " .. method)
 	end
 
-	if private then
-		tbl.sign = "bybit"
-	end
 	return tbl
 end
 
 function M.send(endpoint, method, params, private)
-	return extract_result(gh._send(M.build_request(endpoint, method, params, private)))
+	return extract_result(send.send(M.build_request(endpoint, method, params, private)))
 end
 
 return M
