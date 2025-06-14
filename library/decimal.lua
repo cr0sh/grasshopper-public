@@ -33,6 +33,8 @@ function M.cdef()
 
         decimal_t millis(void);
         void report_timings(LuaStr, decimal_t, decimal_t);
+
+        void free_string(char*);
     ]])
 end
 

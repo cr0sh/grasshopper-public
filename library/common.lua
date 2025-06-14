@@ -14,6 +14,9 @@ end
 
 local function orderbook_eq(tbl1, tbl2)
 	for i in ipairs(tbl1.bids) do
+		if (tbl1.bids[i] == nil) ~= (tbl2.bids[i] == nil) then
+			return false
+		end
 		if tbl1.bids[i].price ~= tbl2.bids[i].price then
 			return false
 		end
@@ -22,6 +25,9 @@ local function orderbook_eq(tbl1, tbl2)
 		end
 	end
 	for i in ipairs(tbl1.asks) do
+		if (tbl1.asks[i] == nil) ~= (tbl2.asks[i] == nil) then
+			return false
+		end
 		if tbl1.asks[i].price ~= tbl2.asks[i].price then
 			return false
 		end

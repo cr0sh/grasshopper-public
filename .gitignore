@@ -2,3 +2,7 @@
 /out
 /node_modules
 /logs
+/libgrasshopper.dylib
+/.env
+/copy.sh
+

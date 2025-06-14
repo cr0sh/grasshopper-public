@@ -7,7 +7,7 @@ use std::{
 
 use futures::{future::select_all, FutureExt};
 use tokio::sync::Mutex;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use crate::{
     event::{RequestPayload, ResponsePayload},
@@ -48,6 +48,11 @@ impl FetchAggregator {
             for fetcher in fetchers.values() {
                 futs.push(Arc::clone(fetcher).next().boxed_local());
             }
+        }
+        if futs.is_empty() {
+            warn!("no subscription to fetch");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            return None;
         }
         select_all(futs).await.0
     }

@@ -1,7 +1,7 @@
 use std::{
     env::var,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use tokio::{
@@ -64,6 +64,10 @@ impl Fetcher {
             vec![reqwest::Client::new()]
         };
         let mut interval = interval(period);
+        #[cfg(feature = "raydium")]
+        let mut raydium_personal_state: Option<
+            raydium_amm_v3::states::PersonalPositionState,
+        > = None;
         loop {
             interval.tick().await;
             let payload = payload.clone();
@@ -75,6 +79,71 @@ impl Fetcher {
                     continue;
                 }
             };
+            match req.url().host_str() {
+                Some("millis.local") => {
+                    let now = SystemTime::UNIX_EPOCH
+                        .elapsed()
+                        .expect("timestamp before the Unix epoch")
+                        .as_millis();
+                    let payload = ResponsePayload::from_string(&payload.url, now.to_string());
+                    *last_data.lock().unwrap() = Some(payload);
+                    notify.notify_waiters();
+                    continue;
+                }
+                #[cfg(feature = "raydium")]
+                Some("raydium-position.local") => {
+                    use solana_sdk::pubkey::Pubkey;
+                    local_address_index = local_address_index.overflowing_add(1).0;
+                    let client = &clients[local_address_index % clients.len()];
+                    let personal_state = match raydium_personal_state {
+                        Some(ref t) => t,
+                        None => {
+                            let personal_position_address = req
+                                .url()
+                                .path()
+                                .trim_start_matches('/')
+                                .parse::<Pubkey>()
+                                .expect("invalid personal position pubkey");
+                            let state = match crate::raydium::fetch_personal_position(
+                                client,
+                                personal_position_address,
+                            )
+                            .await
+                            {
+                                Ok(state) => state,
+                                Err(e) => {
+                                    error!(
+                                        error = Box::<dyn std::error::Error>::from(e),
+                                        "cannot fetch initial position"
+                                    );
+                                    continue;
+                                }
+                            };
+                            raydium_personal_state = Some(state);
+                            raydium_personal_state.as_ref().unwrap()
+                        }
+                    };
+                    let (value_0, value_1) =
+                        match crate::raydium::fetch_position_value(client, personal_state).await {
+                            Ok(x) => x,
+                            Err(e) => {
+                                error!(
+                                    error = Box::<dyn std::error::Error>::from(e),
+                                    "cannot fetch pool state"
+                                );
+                                continue;
+                            }
+                        };
+                    let payload = ResponsePayload::from_string(
+                        &payload.url,
+                        format!(r#"["{value_0}","{value_1}"]"#),
+                    );
+                    *last_data.lock().unwrap() = Some(payload);
+                    notify.notify_waiters();
+                    continue;
+                }
+                _ => (),
+            }
             local_address_index = local_address_index.overflowing_add(1).0;
             let resp = tokio::select! {
                 r = clients[local_address_index % clients.len()].execute(req) => r,
@@ -87,7 +156,9 @@ impl Fetcher {
                         error!(%payload.url, %payload.method, status=%x.status(), "request failed");
                     }
                     let url = x.url().clone();
-                    let payload = match ResponsePayload::new(&payload.url, x).await {
+                    let payload = match ResponsePayload::new(&payload.url, payload.env_suffix, x)
+                        .await
+                    {
                         Ok(x) => x,
                         Err(e) => {
                             error!(%url, error = Box::from(e) as Box<dyn std::error::Error>, "cannot read response");
@@ -105,10 +176,10 @@ impl Fetcher {
     /// Returns [`None`] if the sender side of the channel has been dropped.
     pub async fn next(self: Arc<Self>) -> Option<ResponsePayload> {
         loop {
-            self.notify.notified().await;
             if let Some(x) = self.last_data.lock().unwrap().take() {
                 break Some(x);
             }
+            self.notify.notified().await;
         }
     }
 }

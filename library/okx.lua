@@ -23,14 +23,15 @@ local M = {}
 
 local contract_size_cache
 
-local function contract_size(contract)
+local function get_contract_size(contract)
 	if contract_size_cache == nil then
 		local instruments_data = M.send("/api/v5/public/instruments", "get", { instType = "SWAP" })
+		contract_size_cache = {}
 		for i, v in ipairs(instruments_data) do
 			if v["instId"] == nil or v["instId"] == "" then
 				error(string.format("empty instid on index %d", i))
 			end
-			contract_size_cache[v["instId"]] = decimal(v["ctVal"])
+			contract_size_cache[v["instId"]] = { decimal(v["ctVal"]), decimal(v["lotSz"]) }
 		end
 	end
 	return contract_size_cache[contract]
@@ -94,7 +95,7 @@ function M.subscribe_balance(market_type, params)
 
 	local req = M.build_request(endpoint, "get", util.apply_default(params, {}), true)
 
-	gh._subscribe(req, 250)
+	gh._subscribe(req, 350)
 	return router.register(req, parse_balance)
 end
 
@@ -120,7 +121,7 @@ function M.subscribe_position(market_type, params)
 			if v.posSide == "short" then
 				abs = -abs
 			end
-			position[base .. quote] = abs
+			position[base .. quote] = abs * get_contract_size(v.instId)[1]
 		end
 
 		return common.wrap_position(position)
@@ -128,7 +129,7 @@ function M.subscribe_position(market_type, params)
 
 	local req = M.build_request(endpoint, "get", util.apply_default(params, { instType = inst_type }), true)
 
-	gh._subscribe(req, 250)
+	gh._subscribe(req, 350)
 	return router.register(req, parse_position)
 end
 
@@ -147,12 +148,16 @@ function M.subscribe_orders(market, params)
 	local function parse_orders(payload)
 		local data = extract_data(payload)
 		local orders = {}
+		local contract_size = decimal(1)
+		if market_type == "swap" then
+			contract_size = get_contract_size(symbol)[1]
+		end
 
 		for _, v in ipairs(data) do
 			if v.side == "buy" then
-				table.insert(orders, { price = decimal(v.px), amount = decimal(v.sz), id = v.ordId })
+				table.insert(orders, { price = decimal(v.px), amount = decimal(v.sz) * contract_size, id = v.ordId })
 			else
-				table.insert(orders, { price = decimal(v.px), amount = -decimal(v.sz), id = v.ordId })
+				table.insert(orders, { price = decimal(v.px), amount = -decimal(v.sz) * contract_size, id = v.ordId })
 			end
 		end
 
@@ -161,7 +166,7 @@ function M.subscribe_orders(market, params)
 
 	local req = M.build_request(endpoint, "get", util.apply_default(params, { instId = symbol }), true)
 
-	gh._subscribe(req, 300)
+	gh._subscribe(req, 500)
 	return router.register(req, parse_orders)
 end
 
@@ -173,16 +178,16 @@ function M.limit_order(market, price, amount, params)
 		px = tostring(price),
 		sz = tostring(amount:abs()),
 	}
-	local contract_size
+	local contract_size, lot_size
 	if market_type == "spot" then
 		default_params.instId = base .. "-" .. quote
 	elseif market_type == "swap" then
 		default_params.instId = base .. "-" .. quote .. "-SWAP"
-		contract_size = contract_size(default_params.instId)
+		contract_size, lot_size = table.unpack(get_contract_size(default_params.instId))
 		if contract_size == nil then
 			error(string.format("contract size unknown for instrument %s", default_params.instId))
 		end
-		default_params.sz = tostring((amount / contract_size):abs())
+		default_params.sz = tostring(((amount / contract_size):abs() / lot_size):round_to_decimals(0) * lot_size)
 	else
 		error("unknown market type " .. market_type)
 	end
@@ -206,16 +211,16 @@ function M.market_order(market, amount, params)
 		sz = tostring(amount:abs()),
 		tdMode = "cash",
 	}
-	local contract_size
+	local contract_size, lot_size
 	if market_type == "spot" then
 		default_params.instId = base .. "-" .. quote
 	elseif market_type == "swap" then
 		default_params.instId = base .. "-" .. quote .. "-SWAP"
-		contract_size = contract_size(default_params.instId)
+		contract_size, lot_size = table.unpack(get_contract_size(default_params.instId))
 		if contract_size == nil then
 			error(string.format("contract size unknown for instrument %s", default_params.instId))
 		end
-		default_params.sz = tostring((amount / contract_size):abs())
+		default_params.sz = tostring(((amount / contract_size):abs() / lot_size):round_to_decimals(0) * lot_size)
 	else
 		error("unknown market type " .. market_type)
 	end

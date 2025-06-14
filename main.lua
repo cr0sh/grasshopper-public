@@ -4,18 +4,15 @@ package.path = package.path .. ";library/?.lua;scripts/?.lua"
 
 local ffi = require("ffi")
 local gh = require("gh")
-local json = require("json")
 local decimal = require("decimal")
 local executor = require("executor")
 
 gh.cdef()
-json.cdef()
 decimal.cdef()
 
 local grasshopper = ffi.load("grasshopper")
 
 gh.set_clib(grasshopper)
-json.set_clib(grasshopper)
 decimal.set_clib(grasshopper)
 
 gh.initialize()

@@ -13,11 +13,11 @@ local function price_exists(orderbook_units, test_price)
 	return false
 end
 
-local upbit_stoppers = {
+M.upbit_stoppers = {
 	{ decimal("0.1"), decimal("0.0001") },
 	{ decimal("1"), decimal("0.001") },
 	{ decimal("10"), decimal("0.01") },
-	{ decimal("100"), decimal("0.1") },
+	{ decimal("100"), decimal("1") },
 	{ decimal("1000"), decimal("1") },
 	{ decimal("10000"), decimal("5") },
 	{ decimal("100000"), decimal("10") },
@@ -27,12 +27,11 @@ local upbit_stoppers = {
 	{ decimal("9999999999"), decimal("1000") },
 }
 
-local bithumb_stoppers = {
-	{ decimal("1"), decimal("0.0001") },
-	{ decimal("10"), decimal("0.001") },
-	{ decimal("100"), decimal("0.01") },
-	{ decimal("1000"), decimal("0.1") },
-	{ decimal("5000"), decimal("1") },
+M.bithumb_stoppers = {
+	{ decimal("1"), decimal("0.001") },
+	{ decimal("10"), decimal("0.01") },
+	{ decimal("100"), decimal("1") },
+	-- { decimal("5000"), decimal("1") },
 	{ decimal("10000"), decimal("5") },
 	{ decimal("50000"), decimal("10") },
 	{ decimal("100000"), decimal("50") },
@@ -45,7 +44,7 @@ local bithumb_stoppers = {
 ---@param price Decimal
 ---@param stop_on_equal boolean
 ---@return Decimal
-local function krw_price_unit(stoppers, price, stop_on_equal)
+function M.krw_price_unit(stoppers, price, stop_on_equal)
 	for _, v in ipairs(stoppers) do
 		local upper, unit = unpack(v)
 		if price < upper or price == upper and stop_on_equal then
@@ -62,28 +61,54 @@ end
 ---@param force_maker boolean
 ---@param is_upbit boolean | nil
 ---@param is_bithumb boolean | nil
-function M.smart_price_bid(orderbook, premium_fun, premium_target, price_unit, force_maker, is_upbit, is_bithumb)
+function M.smart_price_bid(
+	orderbook,
+	premium_fun,
+	premium_target,
+	price_unit,
+	force_maker,
+	is_upbit,
+	is_bithumb,
+	search_price_unit
+)
+	if search_price_unit == nil then
+		search_price_unit = price_unit
+	end
 	local price
-	price = orderbook.asks[#orderbook.asks].price
+	if #orderbook.asks >= 50 then
+		-- NOTE: some exchanges accept outlier prices, so filter them
+		price = orderbook.asks[math.floor(#orderbook.asks * 0.9)].price:min(orderbook.asks[1].price * decimal(2))
+	else
+		price = orderbook.asks[#orderbook.asks].price
+	end
 	if force_maker then
-		price = orderbook.bids[1].price
+		if is_upbit then
+			price_unit = M.krw_price_unit(M.upbit_stoppers, price, true)
+		elseif is_bithumb then
+			price_unit = M.krw_price_unit(M.bithumb_stoppers, price, true)
+		end
+		if orderbook.asks[1].price > orderbook.bids[1].price + price_unit then
+			price = orderbook.bids[1].price + price_unit
+		else
+			price = orderbook.bids[1].price
+		end
 	end
 	while premium_fun(price) < premium_target do
 		if is_upbit then
-			price_unit = krw_price_unit(upbit_stoppers, price, true)
+			price_unit = M.krw_price_unit(M.upbit_stoppers, price, true)
 		elseif is_bithumb then
-			price_unit = krw_price_unit(bithumb_stoppers, price, true)
+			price_unit = M.krw_price_unit(M.bithumb_stoppers, price, true)
 		end
-		price = price - price_unit
+		price = price - search_price_unit
 	end
-	if not price_exists(orderbook.asks, price) then
-		while not price_exists(orderbook.bids, price - price_unit) and price >= orderbook.bids[#orderbook.bids].price do
-			if is_upbit then
-				price_unit = krw_price_unit(upbit_stoppers, price, true)
-			elseif is_bithumb then
-				price_unit = krw_price_unit(bithumb_stoppers, price, true)
+	if price < orderbook.asks[1].price then
+		-- optimize maker price
+		for _, entry in ipairs(orderbook.bids) do
+			if entry.price < price then
+				return entry.price + price_unit
+			elseif entry.price == price then
+				return price
 			end
-			price = price - price_unit
 		end
 	end
 	return price
@@ -96,28 +121,54 @@ end
 ---@param force_maker boolean
 ---@param is_upbit boolean | nil
 ---@param is_bithumb boolean | nil
-function M.smart_price_ask(orderbook, premium_fun, premium_target, price_unit, force_maker, is_upbit, is_bithumb)
+function M.smart_price_ask(
+	orderbook,
+	premium_fun,
+	premium_target,
+	price_unit,
+	force_maker,
+	is_upbit,
+	is_bithumb,
+	search_price_unit
+)
+	if search_price_unit == nil then
+		search_price_unit = price_unit
+	end
 	local price
-	price = orderbook.bids[#orderbook.bids].price
+	if #orderbook.bids >= 50 then
+		-- NOTE: some exchanges accept outlier prices, so filter them
+		price = orderbook.bids[math.floor(#orderbook.bids * 0.9)].price:max(orderbook.bids[1].price / decimal(2))
+	else
+		price = orderbook.bids[#orderbook.bids].price
+	end
 	if force_maker then
-		price = orderbook.asks[1].price
+		if is_upbit then
+			price_unit = M.krw_price_unit(M.upbit_stoppers, price, false)
+		elseif is_bithumb then
+			price_unit = M.krw_price_unit(M.bithumb_stoppers, price, false)
+		end
+		if orderbook.bids[1].price < orderbook.asks[1].price - price_unit then
+			price = orderbook.asks[1].price - price_unit
+		else
+			price = orderbook.asks[1].price
+		end
 	end
 	while premium_fun(price) < premium_target do
 		if is_upbit then
-			price_unit = krw_price_unit(upbit_stoppers, price, false)
+			price_unit = M.krw_price_unit(M.upbit_stoppers, price, false)
 		elseif is_bithumb then
-			price_unit = krw_price_unit(bithumb_stoppers, price, false)
+			price_unit = M.krw_price_unit(M.bithumb_stoppers, price, false)
 		end
-		price = price + price_unit
+		price = price + search_price_unit
 	end
-	if not price_exists(orderbook.bids, price) then
-		while not price_exists(orderbook.asks, price + price_unit) and price <= orderbook.asks[#orderbook.asks].price do
-			if is_upbit then
-				price_unit = krw_price_unit(upbit_stoppers, price, false)
-			elseif is_bithumb then
-				price_unit = krw_price_unit(bithumb_stoppers, price, false)
+	if price > orderbook.bids[1].price then
+		-- optimize maker price
+		for _, entry in ipairs(orderbook.asks) do
+			if entry.price > price then
+				return entry.price - price_unit
+			elseif entry.price == price then
+				return price
 			end
-			price = price + price_unit
 		end
 	end
 	return price
@@ -155,8 +206,9 @@ local OrderManager = {}
 ---@param market Market
 ---@param orders_params any
 ---@param force_stale_side "bid"|"ask"|nil
+---@param silent boolean|nil
 ---@return OrderManager
-function OrderManager:new(exchange, market, orders_params, force_stale_side)
+function OrderManager:new(exchange, market, orders_params, force_stale_side, silent)
 	local o = {}
 	setmetatable(o, self)
 	self.__index = self
@@ -169,6 +221,7 @@ function OrderManager:new(exchange, market, orders_params, force_stale_side)
 	o.orders_cleaned = false
 	o.should_cancel = {}
 	o.force_stale_side = force_stale_side
+	o.silent = silent
 
 	o.extractor = o.exchange.subscribe_orders(o.market, orders_params)
 
@@ -216,7 +269,7 @@ function OrderManager:update(x, extractor)
 			self.open_orders[order.id] = self.pending_orders[order.id]
 			self.pending_orders[order.id] = nil
 			gh.debug(string.format("order %s is open", order.id))
-		elseif self.should_cancel[order.id] ~= nil or self.single_side ~= nil and force_match then
+		elseif self.should_cancel[order.id] ~= nil or force_match and self.open_orders[order.id] == nil then
 			gh.warn(string.format("cancelling stale order %s", order.id))
 			local success = util.pwcall(self.exchange.cancel_order, self.market, order)
 			if success then
@@ -235,9 +288,16 @@ function OrderManager:update(x, extractor)
 				end
 			end
 			if not found then
-				gh.debug(string.format("order %s filled", id))
-				self.open_orders[id] = nil
-				filled_hook[2]()
+				filled_hook[3] = filled_hook[3] - 1
+				if filled_hook[3] == 0 then
+					if not self.silent then
+						gh.debug(string.format("order %s filled", id))
+					end
+					self.open_orders[id] = nil
+					filled_hook[2]()
+				end
+			else
+				filled_hook[3] = 5
 			end
 		end
 	end
@@ -254,7 +314,9 @@ function OrderManager:update(x, extractor)
 		if not found then
 			self.should_cancel[id] = self.should_cancel[id] - 1
 			if self.should_cancel[id] == 0 then
-				gh.debug(string.format("order %s canceled", id))
+				if not self.silent then
+					gh.debug(string.format("order %s canceled", id))
+				end
 				self.should_cancel[id] = nil
 			end
 		end
@@ -270,7 +332,12 @@ end
 ---@param filled_hook fun()|nil
 ---@return Order|nil
 function OrderManager:limit_order(price, amount, filled_hook, params)
-	local success, ret = util.pwcall(self.exchange.limit_order, self.market, price, amount, params)
+	local success, ret
+	if self.silent then
+		success, ret = pcall(self.exchange.limit_order, self.market, price, amount, params)
+	else
+		success, ret = util.pwcall(self.exchange.limit_order, self.market, price, amount, params)
+	end
 	if not success then
 		if is_timeout(ret) then
 			gh.error("timed out while placing an order. Restarting")
@@ -278,15 +345,22 @@ function OrderManager:limit_order(price, amount, filled_hook, params)
 		end
 		return nil
 	end
-	gh.debug(string.format("order %s is pending", ret.id))
-	self.pending_orders[ret.id] = { gh.millis(), filled_hook or function() end }
+	if not self.silent then
+		gh.debug(string.format("order %s is pending", ret.id))
+	end
+	self.pending_orders[ret.id] = { gh.millis(), filled_hook or function() end, 5 }
 	return ret
 end
 
 ---@param amount Decimal
 ---@param filled_hook fun()|nil
 function OrderManager:market_order(amount, filled_hook)
-	local success, _ = util.pwcall(self.exchange.market_order, self.market, amount)
+	local success
+	if self.silent then
+		success, _ = pcall(self.exchange.market_order, self.market, amount)
+	else
+		success, _ = util.pwcall(self.exchange.market_order, self.market, amount)
+	end
 	if not success then
 		return
 	end
@@ -297,7 +371,9 @@ end
 
 ---@param order Order
 function OrderManager:cancel_order(order, force_forget, silent)
-	gh.debug(string.format("cancelling order %s", order.id))
+	if not self.silent then
+		gh.debug(string.format("cancelling order %s", order.id))
+	end
 	self.pending_orders[order.id] = nil
 	self.should_cancel[order.id] = 10
 	while true do

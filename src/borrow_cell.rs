@@ -4,6 +4,7 @@ use std::{
     process::abort,
 };
 
+#[allow(dead_code)]
 pub(crate) trait BorrowCell<T> {
     fn borrowed<R>(&self, func: impl FnOnce(&T) -> R) -> R;
 }

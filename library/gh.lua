@@ -8,7 +8,8 @@ local M = {}
 
 ---@class ResponsePayload
 ---@field url string
----@field content string
+---@field content string | nil
+---@field env_suffix string | nil
 ---@field status number
 ---@field error boolean
 ---@field restart boolean
@@ -27,6 +28,9 @@ function M.cdef()
             const uint8_t *content_ptr;
             size_t content_len;
             size_t content_cap;
+            const uint8_t *env_suffix_ptr;
+            size_t env_suffix_len;
+            size_t env_suffix_cap;
             uint16_t status;
             bool error;
             bool restart;
@@ -187,7 +191,13 @@ function M.set_clib(x)
 				if self.content_ptr ~= nil then
 					return ffi.string(self.content_ptr, self.content_len)
 				else
-					return ""
+					return nil
+				end
+			elseif key == "env_suffix" then
+				if self.env_suffix_ptr ~= nil then
+					return ffi.string(self.env_suffix_ptr, self.env_suffix_len)
+				else
+					return nil
 				end
 			end
 		end,

@@ -214,9 +214,6 @@ function M.market_order(market, amount, params)
 		type = "MARKET",
 		quantity = amount:abs(),
 	}
-	if market_type == "spot" then
-		default_params.sideEffectType = "MARGIN_BUY"
-	end
 	if amount > decimal(0) then
 		default_params.side = "BUY"
 	else

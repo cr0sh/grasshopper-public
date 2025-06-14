@@ -41,6 +41,7 @@
 ---@field headers {[string]:string} | nil
 ---@field sign string | nil
 ---@field primary_only boolean | nil
+---@field env_suffix string | nil
 
 ---@class Order
 ---@field price Decimal | nil

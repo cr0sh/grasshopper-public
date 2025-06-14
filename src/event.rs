@@ -1,6 +1,9 @@
 use std::{
+    cell::{Cell, RefCell},
     collections::HashMap,
+    env::var,
     hash::Hash,
+    net::IpAddr,
     num::NonZeroU64,
     ptr::null_mut,
     rc::Rc,
@@ -122,6 +125,8 @@ pub struct RequestPayload {
     pub(crate) sign: Option<bool>,
     #[serde(default)]
     pub(crate) primary_only: bool,
+    #[serde(default)]
+    pub(crate) env_suffix: Option<String>,
 }
 
 fn deserialize_method<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Method, D::Error> {
@@ -178,10 +183,11 @@ pub extern "C-unwind" fn next_event() -> Event {
 
 #[lua_export]
 pub extern "C-unwind" fn send_payload(payload: LuaStr) -> NonZeroU64 {
-    fn new_client() -> Client {
+    fn new_client(local_addr: Option<IpAddr>) -> Client {
         Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(2))
+            .local_address(local_addr)
             .http2_keep_alive_timeout(Duration::from_secs(2))
             .http2_keep_alive_interval(Duration::from_secs(5))
             .http2_keep_alive_while_idle(true)
@@ -190,39 +196,71 @@ pub extern "C-unwind" fn send_payload(payload: LuaStr) -> NonZeroU64 {
     }
 
     thread_local! {
-        static CLIENT: Client = new_client();
+        static LOCAL_CLIENT: Client = new_client(None);
+        static ADDR_INDEX: Cell<usize> = Cell::new(0);
+        static LOCAL_ADDR_CLIENTS: RefCell<Option<Vec<Client>>> = RefCell::new(None);
     }
+
+    let payload: RequestPayload =
+        serde_json::from_str(unsafe { payload.as_str() }).expect("cannot parse payload");
+
+    let client = if payload.primary_only {
+        LOCAL_CLIENT.with(|x| x.clone())
+    } else {
+        LOCAL_ADDR_CLIENTS.with(|x| {
+            if x.borrow().is_none() {
+                let local_addresses = match var("GRASSHOPPER_LOCAL_ADDRS") {
+                    Ok(x) => x
+                        .split(',')
+                        .map(String::from)
+                        .map(|x| x.parse())
+                        .collect::<Result<Vec<_>, _>>()
+                        .expect("cannot parse local addresses"),
+                    _ => return LOCAL_CLIENT.with(|x| x.clone()),
+                };
+                *x.borrow_mut() = Some(
+                    local_addresses
+                        .into_iter()
+                        .map(|x| new_client(Some(x)))
+                        .collect(),
+                )
+            }
+            let clients_len = x.borrow().as_ref().unwrap().len();
+            let index = ADDR_INDEX.get();
+            ADDR_INDEX.set((index + 1) % clients_len);
+            x.borrow().as_ref().unwrap()[index].clone()
+        })
+    };
 
     let token = LAST_TOKEN.fetch_add(1, Ordering::Relaxed);
     let token = NonZeroU64::new(token).unwrap();
-    let payload: RequestPayload =
-        serde_json::from_str(unsafe { payload.as_str() }).expect("cannot parse payload");
-    CLIENT.with(|x| {
-        let x = x.clone();
-        RUNTIME_HANDLE
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .spawn(async move {
-                let fut = async {
-                    let request_url = payload.url.to_string();
-                    let resp = x.execute(payload.into_async_reqwest()?).await?;
-                    let payload = ResponsePayload::new(&request_url, resp).await?;
-                    Ok::<_, eyre::Report>(payload)
-                };
-                let payload = fut.await.unwrap_or(ResponsePayload::new_error());
-                let ev = Event::new("send_response", payload, Some(token));
-                QUEUE_TX
-                    .lock()
-                    .await
-                    .as_mut()
-                    .unwrap()
-                    .send(ev)
-                    .await
-                    .expect("channel closed");
-            })
-    });
+    RUNTIME_HANDLE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .spawn(async move {
+            let fut = async {
+                let request_url = payload.url.to_string();
+                let env_suffix = payload.env_suffix.clone();
+                let resp = client.execute(payload.into_async_reqwest()?).await?;
+                let payload = ResponsePayload::new(&request_url, env_suffix.clone(), resp).await?;
+                Ok::<_, eyre::Report>(payload)
+            };
+            let payload = fut.await.unwrap_or_else(|e| {
+                tracing::error!("{e:?}");
+                ResponsePayload::new_error()
+            });
+            let ev = Event::new("send_response", payload, Some(token));
+            QUEUE_TX
+                .lock()
+                .await
+                .as_mut()
+                .unwrap()
+                .send(ev)
+                .await
+                .expect("channel closed");
+        });
     token
 }
 
@@ -239,6 +277,7 @@ impl Hash for RequestPayload {
         self.url.hash(state);
         self.method.hash(state);
         self.body.hash(state);
+        self.env_suffix.hash(state);
     }
 }
 
@@ -278,6 +317,9 @@ pub struct ResponsePayload {
     content: *mut u8,
     content_len: usize,
     content_cap: usize,
+    env_suffix: *mut u8,
+    env_suffix_len: usize,
+    env_suffix_cap: usize,
     status: u16,
     /// Responses on [`send()`] calls: indicates a network error or non-2xx response has been
     /// ocurred.
@@ -289,7 +331,11 @@ pub struct ResponsePayload {
 }
 
 impl ResponsePayload {
-    pub async fn new(request_url: &str, resp: Response) -> eyre::Result<Self> {
+    pub async fn new(
+        request_url: &str,
+        env_suffix: Option<String>,
+        resp: Response,
+    ) -> eyre::Result<Self> {
         let mut url = request_url.to_string();
         let error = !resp.status().is_success();
         let status = resp.status().as_u16();
@@ -309,6 +355,16 @@ impl ResponsePayload {
             std::mem::forget(content);
             (ptr, len, cap)
         };
+        let (env_suffix, env_suffix_len, env_suffix_cap) = if let Some(mut env_suffix) = env_suffix
+        {
+            let ptr = env_suffix.as_mut_ptr();
+            let len = env_suffix.len();
+            let cap = env_suffix.capacity();
+            std::mem::forget(env_suffix);
+            (ptr, len, cap)
+        } else {
+            (null_mut(), 0, 0)
+        };
         Ok(ResponsePayload {
             url,
             url_len,
@@ -316,11 +372,51 @@ impl ResponsePayload {
             content,
             content_len,
             content_cap,
+            env_suffix,
+            env_suffix_len,
+            env_suffix_cap,
             status,
             error,
             restart: false,
             terminate: false,
         })
+    }
+
+    pub fn from_string(request_url: &str, resp_str: String) -> Self {
+        let mut url = request_url.to_string();
+        let error = false;
+        let status = 200;
+        let mut content = resp_str.as_bytes().to_vec();
+        let (url, url_len, url_cap) = unsafe {
+            let slice = url.as_bytes_mut();
+            let ptr = slice.as_mut_ptr();
+            let len = slice.len();
+            let cap = url.capacity();
+            std::mem::forget(url);
+            (ptr, len, cap)
+        };
+        let (content, content_len, content_cap) = {
+            let ptr = content.as_mut_ptr();
+            let len = content.len();
+            let cap = content.capacity();
+            std::mem::forget(content);
+            (ptr, len, cap)
+        };
+        ResponsePayload {
+            url,
+            url_len,
+            url_cap,
+            content,
+            content_len,
+            content_cap,
+            env_suffix: null_mut(),
+            env_suffix_len: 0,
+            env_suffix_cap: 0,
+            status,
+            error,
+            restart: false,
+            terminate: false,
+        }
     }
 
     pub const fn new_terminator() -> Self {
@@ -331,6 +427,9 @@ impl ResponsePayload {
             content: null_mut(),
             content_len: 0,
             content_cap: 0,
+            env_suffix: null_mut(),
+            env_suffix_len: 0,
+            env_suffix_cap: 0,
             status: 0,
             error: false,
             restart: false,
@@ -346,6 +445,9 @@ impl ResponsePayload {
             content: null_mut(),
             content_len: 0,
             content_cap: 0,
+            env_suffix: null_mut(),
+            env_suffix_len: 0,
+            env_suffix_cap: 0,
             status: 0,
             error: true,
             restart: true,
@@ -361,6 +463,9 @@ impl ResponsePayload {
             content: null_mut(),
             content_len: 0,
             content_cap: 0,
+            env_suffix: null_mut(),
+            env_suffix_len: 0,
+            env_suffix_cap: 0,
             status: 0,
             error: true,
             restart: false,

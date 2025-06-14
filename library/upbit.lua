@@ -58,7 +58,7 @@ function M.subscribe_orderbook(market, params)
 		})
 	)
 
-	gh._subscribe(req, 200)
+	gh._subscribe(req, 400)
 	return router.register(req, parse_orderbook)
 end
 

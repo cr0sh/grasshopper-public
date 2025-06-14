@@ -1,6 +1,6 @@
 [package]
 name = "grasshopper"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 
 [lib]
@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 axum = "0.6.18"
 base64 = "0.21.0"
 color-eyre = "0.6.2"
-exqwest = { git = "https://github.com/cr0sh/exqwest.git", version = "0.1.0" }
+exqwest = { git = "https://github.com/cr0sh/exqwest.git", version = "0.4.0" }
 eyre = "0.6.8"
 futures = "0.3.28"
 grasshopper-macros = { version = "0.1.0", path = "macros" }
@@ -25,12 +25,17 @@ reqwest = { version = "0.11.17", features = ["rustls-tls", "rustls-tls-webpki-ro
 rust_decimal = { version = "1.29.1", features = ["maths"] }
 serde = { version = "1.0.162", features = ["derive"] }
 serde_json = "1.0.96"
+solana-sdk = { version = "~1.16", optional = true }
 tokio = { version = "1.28.0", features = ["full"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
 tracing-panic = "0.1.1"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 urlencoding = "2.1.2"
+raydium-amm-v3 = { git = "https://github.com/raydium-io/raydium-clmm", rev = "e5783e850d17eb28f1449483f3802088108ea0c7", version = "0.1.0", features = ["no-entrypoint", "cpi"], optional = true }
+spl-memo = { version = "=4.0.0", optional = true }
+spl-token = { version = "=4.0.0", optional = true }
+anchor-client = { version = "0.29", optional = true }
 
 [workspace]
 members = ["macros"]
@@ -44,4 +49,14 @@ inherits = "release"
 [build-dependencies]
 cc = "1.0.83"
 rust_decimal_macros = "1.29.1"
+
+[features]
+default = ["raydium"]
+raydium = ["solana-sdk", "raydium-amm-v3", "spl-token", "spl-memo", "anchor-client"]
+solana-sdk = ["dep:solana-sdk"]
+raydium-amm-v3 = ["dep:raydium-amm-v3"]
+
+[patch.crates-io.curve25519-dalek]
+git = "https://github.com/solana-labs/curve25519-dalek.git"
+rev = "b500cdc2a920cd5bff9e2dd974d7b97349d61464"
 

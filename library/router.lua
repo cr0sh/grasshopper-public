@@ -45,15 +45,19 @@ end
 function M.register(req, callback)
 	local routes, _, _, next_identifier = get_strategy_locals()
 	-- TODO: handle case of same-req, different-callback case
-	if routes[req.url] ~= nil then
-		return routes[req.url][1]
+	local url_and_env_suffix = req.url
+	if req.env_suffix then
+		url_and_env_suffix = req.url .. ":" .. req.env_suffix
+	end
+	if routes[url_and_env_suffix] ~= nil then
+		return routes[url_and_env_suffix][1]
 	end
 	local ident = next_identifier
 	local extractor = function(tbl)
 		return tbl[ident]
 	end
 
-	routes[req.url] = { extractor, callback, ident }
+	routes[url_and_env_suffix] = { extractor, callback, ident }
 	context.strategy_local()[next_identifier_key] = ident + 1
 	return extractor
 end
@@ -65,27 +69,34 @@ local function next()
 	local routes, recent_payloads, recent_callback_results = get_strategy_locals()
 	while true do
 		---@type ResponsePayload
-		local payload
-		for url, p in pairs(recent_payloads) do
-			assert(url == p.url, string.format("%s ~= %s", url, p.url))
+		local payload, url_and_env_suffix
+		for _, p in pairs(recent_payloads) do
 			payload = p
+			url_and_env_suffix = payload.url
+			if payload.env_suffix then
+				url_and_env_suffix = payload.url .. ":" .. payload.env_suffix
+			end
 			break
 		end
 		if payload == nil then
 			payload = context.yield(function(ev)
 				if ev.kind == "fetcher" then
-					if routes[ev.response_payload.url] ~= nil then
+					url_and_env_suffix = ev.response_payload.url
+					if ev.response_payload.env_suffix then
+						url_and_env_suffix = ev.response_payload.url .. ":" .. ev.response_payload.env_suffix
+					end
+					if routes[url_and_env_suffix] ~= nil then
 						return ev.response_payload
 					end
 				end
 			end)
 		end
-		recent_payloads[payload.url] = nil
+		recent_payloads[url_and_env_suffix] = nil
 
-		if routes[payload.url] == nil then
-			gh.warn("spurious event delivery from " .. payload.url)
+		if routes[url_and_env_suffix] == nil then
+			gh.warn("spurious event delivery from " .. url_and_env_suffix)
 		else
-			local extractor, callback, identifier = unpack(routes[payload.url])
+			local extractor, callback, identifier = unpack(routes[url_and_env_suffix])
 			local success, candidate = xpcall(callback, function(e)
 				gh.debug(debug.traceback())
 				return e
@@ -105,8 +116,12 @@ end
 ---@param payload ResponsePayload
 function M.deliver_fetcher_payload(payload)
 	local routes, recent_payloads = get_strategy_locals()
-	if routes[payload.url] ~= nil then
-		recent_payloads[payload.url] = payload
+	local url_and_env_suffix = payload.url
+	if payload.env_suffix then
+		url_and_env_suffix = payload.url .. ":" .. payload.env_suffix
+	end
+	if routes[url_and_env_suffix] ~= nil then
+		recent_payloads[url_and_env_suffix] = payload
 	end
 end
 

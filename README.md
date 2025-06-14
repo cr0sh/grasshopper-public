@@ -7,7 +7,7 @@ Grasshopper is a Rust-based Lua runtime for cryptocurrency trading. It offers th
     - Note: On-demand HTTP requests are performed synchronously
 - Native `Decimal`s support(`gh.decimal()`) - don't panic on handling precision and arithmetic errors like on CCXT!
 - Type annotations based on lua-language-server(aka sumneko-lua): see [`library/types.lua`](https://github.com/cr0sh/grasshopper-public/blob/master/library/types.lua)
-- Supports six cryptocurrency exchanges: Binance, Bithumb, Bybit, Gate.io, OKX, UPbit. More to come!
+- Supports 6+ cryptocurrency exchanges: Binance, Bithumb, Bybit, Gate.io, OKX, UPbit. More to come!
 - Logging experience with [tracing](https://crates.io/crates/tracing) bindings on lua (`gh.info`, `gh.debug`, `gh.warn`, ...)
 - Supports execution of multiple strategies at once (which are traced individually with tracing)
 
@@ -22,7 +22,11 @@ Write down your own strategy(multiple strategies supported) on `scripts/` and it
 # Special Thanks
 
 Thanks to [khvzak](https://github.com/khvzak) for the amazing [`mlua`](https://github.com/khvzak/mlua) crate, the ultimate Lua bindings for Rust.
+  - Due to design choices, I migrated `mlua` based Rust host bindings to LuaJIT
+    host to C FFI guest bindings. But still thank you for open sourcing
+    convenient bindings!
 
-Thanks to [actboy168](https://github.com/actboy168) for the [`json.lua`](https://github.com/actboy168/json.lua) library.
+Thanks to [actboy168](https://github.com/actboy168) for the [`json.lua`](https://github.com/actboy168/json.lua)
+library(Vendored in `library/json_external.lua`.).
 
 Thanks to [the CCXT team](https://github.com/ccxt) for inspiration of this project.

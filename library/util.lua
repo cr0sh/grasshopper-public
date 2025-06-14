@@ -99,10 +99,10 @@ function M.execute_atexit()
 end
 
 -- Removes the (price, qty) order entry from the orderbook.
-function M.remove_order(orderbook, price, quantity)
+function M.remove_order(orderbook, price, quantity, is_bid)
 	local new_orderbook = { bids = {}, asks = {} }
 	for _, bid in ipairs(orderbook.bids) do
-		if bid.price == price then
+		if is_bid and bid.price == price then
 			if bid.quantity > quantity then
 				table.insert(new_orderbook.bids, { price = bid.price, quantity = bid.quantity - quantity })
 			end
@@ -111,7 +111,7 @@ function M.remove_order(orderbook, price, quantity)
 		end
 	end
 	for _, ask in ipairs(orderbook.asks) do
-		if ask.price == price then
+		if not is_bid and ask.price == price then
 			if ask.quantity > quantity then
 				table.insert(new_orderbook.asks, { price = ask.price, quantity = ask.quantity - quantity })
 			end

@@ -149,6 +149,12 @@ function encode_map.string(v)
 	return '"'
 end
 
+function encode_map.cdata(v)
+	statusBuilder[#statusBuilder + 1] = '"'
+	statusBuilder[#statusBuilder + 1] = encode_string(tostring(v))
+	return '"'
+end
+
 local function convertreal(v)
 	local g = string_format("%.16g", v)
 	if tonumber(g) == v then

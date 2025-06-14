@@ -26,11 +26,12 @@ mod borrow_cell;
 pub mod event;
 mod fetch_aggregator;
 mod fetcher;
-pub mod lazy_value;
 pub mod logging;
 pub mod lua_decimal;
 mod math_utils;
 pub mod metrics;
+#[cfg(feature = "raydium")]
+mod raydium;
 mod rethrow;
 mod signer;
 mod twilio;

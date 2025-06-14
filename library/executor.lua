@@ -75,8 +75,14 @@ function M.event_loop()
 	end
 
 	local error_kind
+	local start = gh.millis()
 
 	for ev in gh.next_event do
+		-- HACK: retart every 24h to prevent possible leaks
+		if gh.millis() - start > decimal("86400000") then
+			gh.debug("performing periodic restart every 24h")
+			return
+		end
 		local success, ret = pcall(function()
 			if ev.kind == "signal" then
 				if ev.response_payload.terminate then

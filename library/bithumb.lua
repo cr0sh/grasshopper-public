@@ -50,7 +50,7 @@ function M.subscribe_orderbook(market, params)
 
 	local req = M.build_request(endpoint, "get", params)
 
-	gh._subscribe(req, 150)
+	gh._subscribe(req, 105)
 	return router.register(req, parse_orderbook)
 end
 
@@ -76,7 +76,7 @@ function M.subscribe_balance(market_type, params)
 
 	local req = M.build_request("/info/balance", "post", util.apply_default(params, { currency = "ALL" }), true)
 
-	gh._subscribe(req, 200)
+	gh._subscribe(req, 100)
 	return router.register(req, parse_balance)
 end
 
@@ -113,7 +113,7 @@ function M.subscribe_orders(market, params)
 		true
 	)
 
-	gh._subscribe(req, 200)
+	gh._subscribe(req, 100)
 	return router.register(req, parse_orders)
 end
 
@@ -184,9 +184,9 @@ function M.build_request(endpoint, method, params, private)
 	local tbl
 	if method == "get" then
 		url = url .. "?" .. urlencoded
-		tbl = { url = url, method = method, sign = private }
+		tbl = { url = url, method = method, sign = private, primary_only = private }
 	elseif method == "post" then
-		tbl = { url = url, method = method, body = urlencoded, sign = private }
+		tbl = { url = url, method = method, body = urlencoded, sign = private, primary_only = private }
 	else
 		error("invalid method " .. method)
 	end

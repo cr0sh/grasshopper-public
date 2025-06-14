@@ -4,18 +4,6 @@ local trade_utils = require("strategy.trade_utils")
 local gh = require("gh")
 local decimal = require("decimal")
 
-local position_extractors = {}
-local taker_exchanges = {}
-local taker_market_types = {}
-local last_hedge = {
-	BTC = decimal(0),
-	FIL = decimal(0),
-}
-local taker_orderbooks = {}
-local position_locked_since = {}
-local last_taker_position_before_lock = {}
-local position_unlockers = {}
-
 ---@class TransposedHedgeConfig
 ---@field max_taker_slippage Decimal
 ---@field max_unhedged Decimal
@@ -26,6 +14,19 @@ local position_unlockers = {}
 
 ---@param transposed_config {[string]: TransposedHedgeConfig}
 local function hedge(transposed_config, ignore_hedge_safeguard)
+	local position_extractors = {}
+	local taker_exchanges = {}
+	local taker_market_types = {}
+	local taker_bases = {}
+	local last_hedge = {
+		BTC = decimal(0),
+		FIL = decimal(0),
+	}
+	local taker_orderbooks = {}
+	local position_locked_since = {}
+	local last_taker_position_before_lock = {}
+	local position_unlockers = {}
+
 	local config_exists = false
 
 	local config = {}
@@ -65,8 +66,9 @@ local function hedge(transposed_config, ignore_hedge_safeguard)
 				trade_utils.subscribe_effective_position(require(exchange), market_type, currency)
 		end
 
-		local market_type, exchange = unpack(taker[currency])
+		local market_type, exchange, base = unpack(taker[currency])
 		taker_market_types[currency] = market_type
+		taker_bases[currency] = base
 		taker_exchanges[currency] = exchange
 		local eff_position = trade_utils.subscribe_effective_position(require(exchange), market_type, currency)
 		position_extractors[currency][exchange .. "-" .. market_type] = eff_position
@@ -88,13 +90,13 @@ local function hedge(transposed_config, ignore_hedge_safeguard)
 		end
 		taker_exchanges[currency] = require(exchange)
 		taker_orderbooks[currency] =
-			require(exchange).subscribe_orderbook(string.format("%s:%s/USDT", market_type, currency))
+			require(exchange).subscribe_orderbook(string.format("%s:%s/%s", market_type, currency, base or "USDT"))
 	end
 
 	local position_confirmed = {}
 
-	local taker_price_unit = {}
-	local taker_quantity_unit = {}
+	local taker_price_unit = config.taker_price_unit or {}
+	local taker_quantity_unit = config.taker_quantity_unit or {}
 
 	router.on(function(x, extractor)
 		local position_error = false
@@ -127,9 +129,17 @@ local function hedge(transposed_config, ignore_hedge_safeguard)
 				taker_price_unit[currency], taker_quantity_unit[currency] =
 					util.orderbook_units(taker_orderbooks[currency](x))
 			end
+			local price_divisor = decimal(1)
+			if taker_bases[currency] == "KRW" then
+				price_divisor = decimal(1400)
+			elseif taker_bases[currency] == "BTC" then
+				price_divisor = decimal(66666)
+			end
 			local mid_price = (
 				taker_orderbooks[currency](x).bids[1].price + taker_orderbooks[currency](x).asks[1].price
-			) / decimal(2)
+			)
+				/ decimal(2)
+				/ price_divisor
 			if not position_confirmed[currency] and net_position:abs() * mid_price > decimal(8000) then
 				gh.error(
 					string.format(
@@ -198,34 +208,43 @@ local function hedge(transposed_config, ignore_hedge_safeguard)
 							limit_price = taker_orderbooks[currency](x).asks[orderbook_idx].price * decimal(1.03)
 						end
 						local net_position_sign = decimal(1)
-						if -net_position < decimal(0) then
+						if net_position > decimal(0) then
 							net_position_sign = decimal(-1)
 						end
 						local params
 						if order_params ~= nil then
 							params = order_params[currency]
 						end
-						local taker_market = string.format("%s:%s/USDT", taker_market_types[currency], currency)
-						local order = taker_exchanges[currency].limit_order(
-							taker_market,
-							(limit_price / taker_price_unit[currency]):round_to_decimals(0) * taker_price_unit[currency],
-							(
-								(net_position_sign * (net_position:abs()) / taker_quantity_unit[currency]):round_to_decimals(
-									0
-								) * taker_quantity_unit[currency]
+						local taker_market = string.format(
+							"%s:%s/%s",
+							taker_market_types[currency],
+							currency,
+							taker_bases[currency] or "USDT"
+						)
+						local amount = net_position_sign
+							* (
+								((net_position:abs()) / taker_quantity_unit[currency]):round_to_decimals(0)
+								* taker_quantity_unit[currency]
 							):min(
 								(max_order_size / taker_quantity_unit[currency]):floor_to_decimals(0)
 									* taker_quantity_unit[currency]
-							),
-							params
-						)
-						local success, ret = pcall(taker_exchanges[currency].cancel_order, taker_market, order)
-						if not success then
-							gh.debug("cannot cancel hedge order: " .. tostring(ret))
+							)
+						if amount:abs() > decimal(0) then
+							local order = taker_exchanges[currency].limit_order(
+								taker_market,
+								(limit_price / taker_price_unit[currency]):round_to_decimals(0)
+									* taker_price_unit[currency],
+								amount,
+								params
+							)
+							local success, ret = pcall(taker_exchanges[currency].cancel_order, taker_market, order)
+							if not success then
+								gh.debug("cannot cancel hedge order: " .. tostring(ret))
+							end
+							last_hedge[currency] = gh.millis()
+							position_locked_since[currency] = gh.millis()
+							position_unlockers[currency](x) -- XXX: to mitigate suspicious position unlock failure
 						end
-						last_hedge[currency] = gh.millis()
-						position_locked_since[currency] = gh.millis()
-						position_unlockers[currency](x) -- XXX: to mitigate suspicious position unlock failure
 					end
 				end
 			end

@@ -19,7 +19,7 @@ pub(crate) fn sign(payload: RequestPayload) -> eyre::Result<RequestPayload> {
             );
         }
     }
-    exqwest::sign_request(&mut req)?;
+    exqwest::sign_request(&mut req, payload.env_suffix.clone())?;
     Ok(RequestPayload {
         url: req.url().to_string(),
         method: req.method().clone(),
@@ -34,5 +34,6 @@ pub(crate) fn sign(payload: RequestPayload) -> eyre::Result<RequestPayload> {
         ),
         sign: None,
         primary_only: payload.primary_only,
+        env_suffix: payload.env_suffix,
     })
 }
