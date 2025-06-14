@@ -19,6 +19,10 @@ I maintain this on my private repository and periodically synchronize to here. F
 
 Write down your own strategy(multiple strategies supported) on `scripts/` and it will be the entrypoint of the runtime. You can import modules from `library/` with `require()`, e.g. `local binance = require("binance");`
 
+The main entrypoint is `./main.lua`.
+
+Grasshopper requires [LuaJIT runtime with `-DLUAJIT_ENABLE_LUA52COMPAT` extensions](https://luajit.org/extensions.html#lua52).
+
 # Special Thanks
 
 Thanks to [khvzak](https://github.com/khvzak) for the amazing [`mlua`](https://github.com/khvzak/mlua) crate, the ultimate Lua bindings for Rust.
